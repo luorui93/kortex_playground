@@ -24,6 +24,8 @@ class DataRecorder(object):
         # Init the topics
         self.joint_state_sub = rospy.Subscriber("/" + self.robot_name + "/base_feedback/joint_state", JointState, 
             self.joint_state_cb)
+
+        # Use: roslaunch rosbridge_server rosbridge_websocket.launch address:=192.168.0.1
         self.tracker_sub = rospy.Subscriber("/wrist_pose", PoseStamped, self.tracker_cb)
         
 
@@ -35,7 +37,7 @@ class DataRecorder(object):
         self.data_addr = "/home/rui/kinova_ws/src/kortex_playground/data/"
     
         self.tracker_demo_traj = []
-        self.tracker_sample_rate = 100 # Using find_vive_hz, the hz ranges between 90-100. Will need to look into how to synchronize the subscribers
+        self.tracker_sample_rate = 90
         self.total_tracker_samples = 0
 
 
