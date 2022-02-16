@@ -35,7 +35,7 @@ class DataRecorder(object):
         self.data_addr = "/home/rui/kinova_ws/src/kortex_playground/data/"
     
         self.tracker_demo_traj = []
-        self.tracker_sample_rate = 10 # Unknown right now. Will update as needed.
+        self.tracker_sample_rate = 100 # Using find_vive_hz, the hz ranges between 90-100. Will need to look into how to synchronize the subscribers
         self.total_tracker_samples = 0
 
 
