@@ -16,7 +16,7 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler, qua
 
 PI = 3.141592653
 
-class ViveController(object):
+class ViveController(object): #RENAME to something
 
 
     def __init__(self):
@@ -30,10 +30,10 @@ class ViveController(object):
         # Initializes initial poses as empty until the user decides to set themwrist_pose
         self.set_init = False
         self.init_controller_pose = Pose()
-        self.init_controller_inv = []
-        self.init_robot_pose = [] # Saves the robot's joint positions. TODO figure out if we want robot position as a Pose class instead
+        self.init_controller_ori_inv = []
+        self.init_joint_stat = [] # Saves the robot's joint positions. TODO figure out if we want robot position as a Pose class instead
         self.controller_pose = Pose()
-        self.robot_pose = Pose()
+        self.joint_stat = []
 
     # Constantly updates the current controller pose
     def controller_cb(self, msg):
@@ -41,18 +41,18 @@ class ViveController(object):
 
         # If initial pose is set, calculate difference relative to init_controller_pose
         if self.set_init:
-            # Calculate the difference in position.
-            current_pose = [self.controller_pose.position.x,
+            # Get current position and orientation in list form
+            current_pos = [self.controller_pose.position.x,
                             self.controller_pose.position.y,
                             self.controller_pose.position.z]
-            pos_diff = current_pose - self.init_controller_pos
-            
-            # Calculate difference in orientation.
             current_orientation = [self.controller_pose.orientation.x,
                                    self.controller_pose.orientation.y,
                                    self.controller_pose.orientation.z,
                                    self.controller_pose.orientation.w]
-            ori_diff = quaternion_multiply(current_orientation, self.init_controller_pose_inv)
+
+            pos_diff, ori_diff = self.calculate_diff(current_pos, current_orientation)
+
+            # TODO Calculate target velocity in cartesian space and convert it to joint velocity
 
     def joint_cb(self, msg):
         # The joint angle range of JointState is -pi~pi, we need to convert it into 0~2pi
@@ -62,14 +62,20 @@ class ViveController(object):
                 pos.append(p + PI)
             else:
                 pos.append(p)
-        self.robot_pose = pos
+        self.joint_stat = pos # RENAME joint_pos or joint_stat
+
+    # Calculate the difference in position and orientation from the starting pose
+    def calculate_diff(self, current_pos, current_orientation):
+        pos_diff = current_pos - self.init_controller_pos
+        ori_diff = quaternion_multiply(current_orientation, self.self.init_controller_ori_inv)
+        return pos_diff, ori_diff
         
 
     def set_init_pose(self):
         input("Press enter to set the intial poses")
 
         self.set_init = True
-        self.init_robot_pose = self.robot_pose
+        self.init_joint_stat = self.joint_stat
 
         self.init_controller_pose = self.controller_pose
         
@@ -78,11 +84,10 @@ class ViveController(object):
                                     self.init_controller_pose.position.y,
                                     self.init_controller_pose.position.z]
         # Calculate initial position's inverse. Code from http://wiki.ros.org/tf2/Tutorials/Quaternions#Relative_rotations
-        self.init_controller_inv = [self.init_controller_pose.orientation.x,
-                                    self.init_controller_pose.orientation.y,
-                                    self.init_controller_pose.orientation.z,
-                                    -self.init_controller_pose.orientation.w]
-
+        self.init_controller_ori_inv = [self.init_controller_pose.orientation.x,
+                                        self.init_controller_pose.orientation.y,
+                                        self.init_controller_pose.orientation.z,
+                                        -self.init_controller_pose.orientation.w]
         
         
         print("Initial controller pose set as: ", self.init_controller_pose)
