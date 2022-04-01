@@ -12,6 +12,7 @@ import message_filters
 import matplotlib.pyplot as plt
 import copy
 import os
+import time
 
 PI = 3.141592653
 
@@ -28,6 +29,8 @@ class DataRecorder(object):
         
 
         # Use: roslaunch rosbridge_server rosbridge_websocket.launch address:=192.168.0.1
+        # roslaunch kortex_driver kortex_driver.launch username:=river password:=river ip_address:=10.75.15.10 gripper:=robotiq_2f_85
+
         # self.tracker_sub = rospy.Subscriber("/wrist_pose", PoseStamped, self.tracker_cb)
         
 
@@ -44,7 +47,7 @@ class DataRecorder(object):
         self.enable_record = False
         self.robot_sample_rate = 40 #Hz
         self.total_robot_samples = 0
-        self.data_addr = "/home/riverlab/kinova_ws/src/kortex_playground/data/"
+        self.data_addr = "/home/riverlab/kinova_ws/src/kortex_playground/sync_data/"
     
         self.tracker_demo_traj = []
         self.tracker_sample_rate = 90
@@ -91,17 +94,17 @@ class DataRecorder(object):
         robot_data_frame = np.array(self.robot_demo_traj)
         tracker_data_frame = np.array(self.tracker_demo_traj)
         data_frame = np.append(robot_data_frame, tracker_data_frame, axis=1)
-        print(data_frame)
 
-        np.savetxt(self.data_addr+'joint_test.csv', robot_data_frame , delimiter=",")
-        rospy.loginfo("Training data saved to "+self.data_addr+'test.csv')
+        np.savetxt(self.data_addr+'sync10.csv', data_frame , delimiter=",")
+        rospy.loginfo("Training data saved to "+self.data_addr+'sync1.csv')
 
 
 if __name__ == "__main__":
     rospy.init_node("data_recorder", log_level=rospy.INFO)
     data_recorder = DataRecorder()
     input("Hit enter to start recording training data")
-    duration = 4
+    duration = 6
+    start = time.time()
     data_recorder.start_record(duration=duration)
     rate = rospy.Rate(10)
     while not rospy.is_shutdown():
@@ -109,6 +112,7 @@ if __name__ == "__main__":
             data_recorder.save_data()
             break
         rate.sleep()
+    print(time.time() - start)
 
 
 
