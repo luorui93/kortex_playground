@@ -137,15 +137,17 @@ class ViveController(object): #RENAME to something
         # TODO: Add a low pass filter here
         twist_msg = TwistCommand()
         twist_msg.reference_frame = 0
-        ff_term= 0.0
-        fb_term = 0.3
+        ff_rot= 1.0
+        ff_trans = 1.0
+        fb_rot = 0.0
+        fb_trans = 0.0
 
-        twist_msg.twist.angular_x = ff_term * -d_pitch / dt + fb_term * ang_error[0]
-        twist_msg.twist.angular_y = ff_term * d_yaw / dt    + fb_term * ang_error[1]
-        twist_msg.twist.angular_z = ff_term * -d_roll / dt  + fb_term * ang_error[2]
-        twist_msg.twist.linear_x  = ff_term * -cartesian_linear_vel[0] + fb_term * pos_error[0]
-        twist_msg.twist.linear_y  = ff_term * -cartesian_linear_vel[1] + fb_term * pos_error[1]
-        twist_msg.twist.linear_z  = ff_term * cartesian_linear_vel[2] + fb_term * pos_error[2]
+        twist_msg.twist.angular_x = ff_rot * -d_pitch / dt + fb_rot * ang_error[0]
+        twist_msg.twist.angular_y = ff_rot * d_yaw / dt    + fb_rot * ang_error[1]
+        twist_msg.twist.angular_z = ff_rot * -d_roll / dt  + fb_rot * ang_error[2]
+        twist_msg.twist.linear_x  = ff_trans * -cartesian_linear_vel[0] + fb_trans * pos_error[0]
+        twist_msg.twist.linear_y  = ff_trans * -cartesian_linear_vel[1] + fb_trans * pos_error[1]
+        twist_msg.twist.linear_z  = ff_trans * cartesian_linear_vel[2]  + fb_trans * pos_error[2]
 
 
         self.twist_cmd_pub.publish(twist_msg)
