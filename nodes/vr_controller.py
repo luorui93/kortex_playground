@@ -146,10 +146,10 @@ class ViveController(object): #RENAME to something
         self.cur_robot_pose = self.tf_buffer.lookup_transform("base_link", "tool_frame", rospy.Time()).transform
         controller_pos_diff = cur_pos - self.init_controller_position
 
-        quat_diff = self.tf_buffer.lookup_transform("vr_controller", "tool_frame", rospy.Time()).transform.rotation
+        cur_quat = self.tf_buffer.lookup_transform("tool_frame", "vr_controller", rospy.Time()).transform.rotation
+        quat_diff = [cur_quat.x, cur_quat.y, cur_quat.z, cur_quat.w]
         quat_err  = quaternion_multiply(quat_diff, self.init_quat_diff_inv)
-        controller_ang_diff = quaternion_multiply(cur_ori, self.init_controller_ori_inv)
-        pos_error, ang_error = self.calculate_pos_error(controller_pos_diff, controller_ang_diff)
+        pos_error, ang_error = self.calculate_pose_error(controller_pos_diff, quat_err)
 
 
         # TODO: Add a low pass filter here
@@ -162,19 +162,17 @@ class ViveController(object): #RENAME to something
         # print(pos_error, ang_error)
 
         twist_msg.twist.angular_x = ff_term * -d_pitch / dt + fb_term * ang_error[0]
-        twist_msg.twist.angular_y = 0.0 #ff_term * d_yaw / dt + fb_term * ang_error[1]
-        twist_msg.twist.angular_z = 0.0 #ff_term * -d_roll / dt + fb_term * ang_error[2]
-        twist_msg.twist.linear_x  = 0.0 #ff_term * -cartesian_linear_vel[0] + fb_term * pos_error[0]
-        twist_msg.twist.linear_y  = 0.0 #ff_term * -cartesian_linear_vel[1] + fb_term * pos_error[1]
-        twist_msg.twist.linear_z  = 0.0 #ff_term * cartesian_linear_vel[2] + fb_term * pos_error[2]
+        twist_msg.twist.angular_y = ff_term * d_yaw / dt    + fb_term * ang_error[1]
+        twist_msg.twist.angular_z = ff_term * -d_roll / dt  + fb_term * ang_error[2]
+        twist_msg.twist.linear_x  = ff_term * -cartesian_linear_vel[0] + fb_term * pos_error[0]
+        twist_msg.twist.linear_y  = ff_term * -cartesian_linear_vel[1] + fb_term * pos_error[1]
+        twist_msg.twist.linear_z  = ff_term * cartesian_linear_vel[2] + fb_term * pos_error[2]
 
 
         self.twist_cmd_pub.publish(twist_msg)
         # print(f"Angular velocity: {self.cartesian_angular_vel}")
 
-    def calculate_pos_error(self, controller_pos_diff, controller_ang_diff):
-        controller_ang_diff = np.array(controller_ang_diff)
-        
+    def calculate_pose_error(self, controller_pos_diff, quat_err):        
         # Get robot's linear difference
         robot_pos = np.array([self.cur_robot_pose.translation.x, self.cur_robot_pose.translation.y, self.cur_robot_pose.translation.z])
         robot_pos_diff = robot_pos - self.init_robot_position
@@ -184,18 +182,13 @@ class ViveController(object): #RENAME to something
                               self.cur_robot_pose.rotation.y,
                               self.cur_robot_pose.rotation.z,
                               self.cur_robot_pose.rotation.w])
-        robot_ang_diff = quaternion_multiply(robot_ori, self.init_robot_ori_inv)
 
         # Get error between controller diff and robot diff
         pos_error = [-controller_pos_diff[0], -controller_pos_diff[1], controller_pos_diff[2]] - robot_pos_diff
         
-        controller_rpy_diff = euler_from_quaternion(controller_ang_diff)
-        robot_rpy_diff = euler_from_quaternion(robot_ang_diff)
-        ang_error = [-controller_rpy_diff[1] - robot_rpy_diff[0], 
-                     controller_rpy_diff[2] - robot_rpy_diff[1], 
-                     -controller_rpy_diff[0] - robot_rpy_diff[2]]
+        ang_error = euler_from_quaternion(quat_err)
         
-        test_msg = robot_rpy_diff[1]
+        test_msg = ang_error[1]
         self.test_pub.publish(test_msg)
         # print(robot_ori)
         return pos_error, ang_error
@@ -210,8 +203,8 @@ class ViveController(object): #RENAME to something
         # self.init_joint_stat = self.joint_stat
         init_robot_pose = self.tf_buffer.lookup_transform("base_link", "tool_frame", rospy.Time()).transform
         self.init_robot_position = np.array([init_robot_pose.translation.x, init_robot_pose.translation.y, init_robot_pose.translation.z])
-        self.init_quat_diff_inv = self.tf_buffer.lookup_transform("vr_controller", "tool_frame", rospy.Time()).transform.rotation
-        self.init_quat_diff_inv[3] = -self.init_quat_diff_inv[3]
+        init_quat = self.tf_buffer.lookup_transform("tool_frame", "vr_controller", rospy.Time()).transform.rotation
+        self.init_quat_diff_inv = [init_quat.x, init_quat.y, init_quat.z, -init_quat.w]
 
 
         self.init_controller_position = [self.cur_pose.position.x, self.cur_pose.position.y, self.cur_pose.position.z]
