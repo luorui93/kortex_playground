@@ -11,8 +11,8 @@ import copy
 import time
 from tf.transformations import euler_from_quaternion, quaternion_from_euler, quaternion_multiply
 import tf2_ros
-
-from kortex_driver.msg import TwistCommand, Twist
+from kortex_driver.srv import SendGripperCommand, SendGripperCommandRequest
+from kortex_driver.msg import TwistCommand, Twist, Finger, GripperMode
 
 PI = 3.141592653
 
@@ -38,33 +38,38 @@ class Filter(object):
 class ViveController(object): #RENAME to something
     def __init__(self):
         super().__init__()
-
-        # Get node params
-        self.robot_name = rospy.get_param('~robot_name', "my_gen3")
-        # self.joint_state_sub = rospy.Subscriber("/" + self.robot_name + "/base_feedback/joint_state", JointState, self.joint_cb)
-        self.tracker_sub = rospy.Subscriber("/controller_pose", PoseStamped, self.controller_cb, queue_size=1)
-        self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
-        self.test_pub = rospy.Publisher("/test_topic", Float32, queue_size=1)
-        self.br = tf2_ros.TransformBroadcaster()
-
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
-        
+    
         # Initializes initial poses as empty until the user decides to set themwrist_pose
         self.set_init = False
+        self.trigger_val = 0
         self.init_pose = Pose()
         self.init_joint_stat = [] # Saves the robot's joint positions.
         self.cur_pose = Pose()
         self.cur_t = Time()
         self.prev_pose = Pose()
         self.prev_t = Time()
-        
 
         # Initialize robot position
         self.init_robot_position = []
         self.init_robot_ori_inv = []
         self.cur_robot_pose = Transform()
         self.joint_stat = []
+
+        # Get node params
+        self.robot_name = rospy.get_param('~robot_name', "my_gen3")
+        # self.joint_state_sub = rospy.Subscriber("/" + self.robot_name + "/base_feedback/joint_state", JointState, self.joint_cb)
+        self.tracker_sub = rospy.Subscriber("/controller_pose", PoseStamped, self.controller_cb, queue_size=1)
+        self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
+        self.trigger_sub = rospy.Subscriber("/trigger", Float32, self.trigger_cb, queue_size=1)
+        self.test_pub = rospy.Publisher("/test_topic", Float32, queue_size=1)
+        self.br = tf2_ros.TransformBroadcaster()
+
+        send_gripper_command_full_name = '/my_gen3/base/send_gripper_command'
+        rospy.wait_for_service(send_gripper_command_full_name)
+        self.send_gripper_command = rospy.ServiceProxy(send_gripper_command_full_name, SendGripperCommand)
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
     # Constantly updates the current controller pose
     def controller_cb(self, msg):
@@ -93,6 +98,24 @@ class ViveController(object): #RENAME to something
         t.transform.rotation.w = self.cur_pose.orientation.w
 
         self.br.sendTransform(t)
+    
+    # Get the value of the trigger. Default is 0. Softmax is 0.75, max is 1
+    def trigger_cb(self, msg):
+        if self.set_init:
+            req = SendGripperCommandRequest()
+            finger = Finger()
+            finger.finger_identifier = 0
+            req.input.gripper.finger.append(finger)
+            req.input.mode = GripperMode.GRIPPER_POSITION
+            if msg.data == 1:
+                finger.value = 1
+                self.send_gripper_command(req)
+            else:
+                finger.value = 0
+                self.send_gripper_command(req)
+            time.sleep(0.5)
+
+
 
     def joint_cb(self, msg):
         # The joint angle range of JointState is -pi~pi, we need to convert it into 0~2pi
@@ -138,9 +161,9 @@ class ViveController(object): #RENAME to something
         twist_msg = TwistCommand()
         twist_msg.reference_frame = 0
         ff_rot= 1.0
-        ff_trans = 1.0
-        fb_rot = 0.0
-        fb_trans = 0.0
+        ff_trans = 0.5
+        fb_rot = 0.5
+        fb_trans = 0.5
 
         twist_msg.twist.angular_x = ff_rot * -d_pitch / dt + fb_rot * ang_error[0]
         twist_msg.twist.angular_y = ff_rot * d_yaw / dt    + fb_rot * ang_error[1]
