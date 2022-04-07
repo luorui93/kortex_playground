@@ -172,7 +172,7 @@ class ViveController(object): #RENAME to something
         twist_msg.twist.linear_z  = ff_trans * cartesian_linear_vel[2]  + fb_trans * pos_error[2]
 
 
-        # self.twist_cmd_pub.publish(twist_msg)
+        self.twist_cmd_pub.publish(twist_msg)
 
     def calculate_pose_error(self, controller_pos_diff, quat_err):        
         # Get robot's linear difference
