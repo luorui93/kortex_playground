@@ -107,13 +107,12 @@ class ViveController(object): #RENAME to something
             finger.finger_identifier = 0
             req.input.gripper.finger.append(finger)
             req.input.mode = GripperMode.GRIPPER_POSITION
-            if msg.data == 1:
-                finger.value = 1
-                self.send_gripper_command(req)
-            else:
-                finger.value = 0
-                self.send_gripper_command(req)
-            time.sleep(0.5)
+            val = round(msg.data, 1)
+            if (val * 10) % 2 == 1:
+                val += 0.1
+            finger.value = val
+            self.send_gripper_command(req)
+
 
 
 
@@ -173,7 +172,7 @@ class ViveController(object): #RENAME to something
         twist_msg.twist.linear_z  = ff_trans * cartesian_linear_vel[2]  + fb_trans * pos_error[2]
 
 
-        self.twist_cmd_pub.publish(twist_msg)
+        # self.twist_cmd_pub.publish(twist_msg)
 
     def calculate_pose_error(self, controller_pos_diff, quat_err):        
         # Get robot's linear difference
