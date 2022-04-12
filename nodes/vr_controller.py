@@ -3,7 +3,7 @@
 import rospy
 import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped, TransformStamped, Transform
-from std_msgs.msg import Time, Float32
+from std_msgs.msg import Time, Float32, Bool
 from rospy.rostime import Duration
 from sensor_msgs.msg import JointState
 from multiprocessing import Lock
@@ -11,7 +11,7 @@ import copy
 import time
 from tf.transformations import euler_from_quaternion, quaternion_from_euler, quaternion_multiply
 import tf2_ros
-from kortex_driver.srv import SendGripperCommand, SendGripperCommandRequest
+from kortex_driver.srv import *
 from kortex_driver.msg import TwistCommand, Twist, Finger, GripperMode
 
 PI = 3.141592653
@@ -57,19 +57,36 @@ class ViveController(object): #RENAME to something
 
         # Get node params
         self.robot_name = rospy.get_param('~robot_name', "my_gen3")
+
+        # Initialize TF buffer and listener
+        self.br = tf2_ros.TransformBroadcaster()
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+
+        # Initialize subscribers and publishers
         # self.joint_state_sub = rospy.Subscriber("/" + self.robot_name + "/base_feedback/joint_state", JointState, self.joint_cb)
+        self.test_pub = rospy.Publisher("/test_topic", Float32, queue_size=1)
         self.tracker_sub = rospy.Subscriber("/controller_pose", PoseStamped, self.controller_cb, queue_size=1)
         self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
         self.trigger_sub = rospy.Subscriber("/trigger", Float32, self.trigger_cb, queue_size=1)
-        self.test_pub = rospy.Publisher("/test_topic", Float32, queue_size=1)
-        self.br = tf2_ros.TransformBroadcaster()
+        self.grip_sub = rospy.Subscriber("/grip", Bool, self.grip_cb, queue_size=1)
+        
+        
 
+        # Initialize services
         send_gripper_command_full_name = '/my_gen3/base/send_gripper_command'
         rospy.wait_for_service(send_gripper_command_full_name)
         self.send_gripper_command = rospy.ServiceProxy(send_gripper_command_full_name, SendGripperCommand)
 
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+        read_action_full_name = '/' + self.robot_name + '/base/read_action'
+        rospy.wait_for_service(read_action_full_name)
+        self.read_action = rospy.ServiceProxy(read_action_full_name, ReadAction) # Used for homing the robot
+
+        execute_action_full_name = '/' + self.robot_name + '/base/execute_action'
+        rospy.wait_for_service(execute_action_full_name)
+        self.execute_action = rospy.ServiceProxy(execute_action_full_name, ExecuteAction)
+
+        
 
     # Constantly updates the current controller pose
     def controller_cb(self, msg):
@@ -98,6 +115,8 @@ class ViveController(object): #RENAME to something
         t.transform.rotation.w = self.cur_pose.orientation.w
 
         self.br.sendTransform(t)
+        test_msg = self.cur_pose.position.x
+        self.test_pub.publish(test_msg)
     
     # Get the value of the trigger. Default is 0. Softmax is 0.75, max is 1
     def trigger_cb(self, msg):
@@ -114,7 +133,13 @@ class ViveController(object): #RENAME to something
             self.send_gripper_command(req)
 
 
-
+    # Stops all movement and quits if grip is pushed
+    def grip_cb(self, msg):
+        if msg.data:
+            self.tracker_sub.unregister()
+            twist_msg = TwistCommand()
+            self.twist_cmd_pub.publish(twist_msg)
+            rospy.signal_shutdown(reason="User signalled to stop")
 
     def joint_cb(self, msg):
         # The joint angle range of JointState is -pi~pi, we need to convert it into 0~2pi
@@ -171,7 +196,6 @@ class ViveController(object): #RENAME to something
         twist_msg.twist.linear_y  = ff_trans * -cartesian_linear_vel[1] + fb_trans * pos_error[1]
         twist_msg.twist.linear_z  = ff_trans * cartesian_linear_vel[2]  + fb_trans * pos_error[2]
 
-
         self.twist_cmd_pub.publish(twist_msg)
 
     def calculate_pose_error(self, controller_pos_diff, quat_err):        
@@ -183,15 +207,22 @@ class ViveController(object): #RENAME to something
         pos_error = [-controller_pos_diff[0], -controller_pos_diff[1], controller_pos_diff[2]] - robot_pos_diff
         
         ang_error = euler_from_quaternion(quat_err)
-        
-        # test_msg = ang_error[1]
-        # self.test_pub.publish(test_msg)
+
         return pos_error, ang_error
 
     def set_init_pose(self):
-        input("Press enter to set the intial position of the vr controller")
-
-        self.set_init = True
+        key = None
+        while key != '':
+            key = input("Press enter to set the intial position of the vr controller, or \"h\" to home the robot\n")
+            if key == 'h':
+                req = ReadActionRequest()
+                req.input.identifier = 2 # Home action identifier
+                res = self.read_action(req)
+                req = ExecuteActionRequest()
+                req.input = res.output
+                self.execute_action(req)
+                time.sleep(1)
+        # input("Press enter to set the initial position of the vr controller")
         # self.init_joint_stat = self.joint_stat
         init_robot_pose = self.tf_buffer.lookup_transform("base_link", "tool_frame", rospy.Time()).transform
         self.init_robot_position = np.array([init_robot_pose.translation.x, 
@@ -203,6 +234,8 @@ class ViveController(object): #RENAME to something
         self.init_controller_position = [self.cur_pose.position.x, self.cur_pose.position.y, self.cur_pose.position.z]
         
         print("Initial controller position set as: ", self.init_controller_position)
+        
+        self.set_init = True
         
 
 
