@@ -26,14 +26,31 @@ def quaternion_diff(q1, q2):
     return quaternion_multiply(q1, q2_inv)
 
 class Filter(object):
-    def __init__(self) -> None:
+    def __init__(self, input = []) -> None:
         super().__init__()
-        
-        # Moving average filter
-        self.prev_output = 0
-    def moving_average_filter(self):
-        pass
+        self.fc = 5
+        self.w  = 2 * PI * self.fc
+        self.Ts = 1/90
+        self.input_coeff = self.w * self.Ts / (2 + self.w * self.Ts)
+        self.prev_input_coeff = self.w * self.Ts / (2 + self.w * self.Ts)
+        self.prev_output_coeff = (2 - self.w * self.Ts) / (2 + self.w * self.Ts)
 
+
+        # Moving average filter
+        self.prev_output = np.array([0] * 6)
+        self.prev_input = np.array([0] * 6)
+        self.ouput = np.array([0] * 6)
+
+
+    def moving_average_filter(self, input = [0]*6):
+        input = np.array(input)
+        output = ((self.input_coeff * input)
+                + (self.prev_input_coeff * self.prev_input)
+                + (self.prev_output_coeff * self.prev_output))
+        self.prev_input = input
+        self.prev_output = output
+
+        return output
 
 class ViveController(object): #RENAME to something
     def __init__(self):
@@ -48,6 +65,7 @@ class ViveController(object): #RENAME to something
         self.cur_t = Time()
         self.prev_pose = Pose()
         self.prev_t = Time()
+        self.filter = Filter()
 
         # Initialize robot position
         self.init_robot_position = []
@@ -70,7 +88,6 @@ class ViveController(object): #RENAME to something
         self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
         self.trigger_sub = rospy.Subscriber("/trigger", Float32, self.trigger_cb, queue_size=1)
         self.grip_sub = rospy.Subscriber("/grip", Bool, self.grip_cb, queue_size=1)
-        
         
 
         # Initialize services
@@ -103,7 +120,7 @@ class ViveController(object): #RENAME to something
         # Publish in the TF tree
         t = TransformStamped()
 
-        t.header.stamp = rospy.Time.now()
+        t.header.stamp = rospy.Time.now()       
         t.header.frame_id = "unity"
         t.child_frame_id = "vr_controller"
         t.transform.translation.x = self.cur_pose.position.x
@@ -137,9 +154,19 @@ class ViveController(object): #RENAME to something
     def grip_cb(self, msg):
         if msg.data:
             self.tracker_sub.unregister()
+            req = SendGripperCommandRequest()
+            finger = Finger()
+            finger.finger_identifier = 0
+            req.input.gripper.finger.append(finger)
+            req.input.mode = GripperMode.GRIPPER_POSITION
+            finger.value = 0
+            self.send_gripper_command(req)
+
             twist_msg = TwistCommand()
             self.twist_cmd_pub.publish(twist_msg)
+            time.sleep(0.5)
             rospy.signal_shutdown(reason="User signalled to stop")
+            print("Stopped the node")
 
     def joint_cb(self, msg):
         # The joint angle range of JointState is -pi~pi, we need to convert it into 0~2pi
@@ -189,12 +216,24 @@ class ViveController(object): #RENAME to something
         fb_rot = 0.5
         fb_trans = 0.5
 
-        twist_msg.twist.angular_x = ff_rot * -d_pitch / dt + fb_rot * ang_error[0]
-        twist_msg.twist.angular_y = ff_rot * d_yaw / dt    + fb_rot * ang_error[1]
-        twist_msg.twist.angular_z = ff_rot * -d_roll / dt  + fb_rot * ang_error[2]
-        twist_msg.twist.linear_x  = ff_trans * -cartesian_linear_vel[0] + fb_trans * pos_error[0]
-        twist_msg.twist.linear_y  = ff_trans * -cartesian_linear_vel[1] + fb_trans * pos_error[1]
-        twist_msg.twist.linear_z  = ff_trans * cartesian_linear_vel[2]  + fb_trans * pos_error[2]
+        filter_input = np.append(cartesian_linear_vel, [d_pitch, d_yaw, d_roll])
+        # Output format is [velx, vely, velz, pitch, yaw, roll]
+        f_output = self.filter.moving_average_filter(input=filter_input)
+
+
+
+        twist_msg.twist.angular_x = ff_rot * -f_output[3] / dt + fb_rot * ang_error[0]
+        twist_msg.twist.angular_y = ff_rot * f_output[4] / dt    + fb_rot * ang_error[1]
+        twist_msg.twist.angular_z = ff_rot * -f_output[5] / dt  + fb_rot * ang_error[2]
+        twist_msg.twist.linear_x  = ff_trans * -f_output[0] + fb_trans * pos_error[0]
+        twist_msg.twist.linear_y  = ff_trans * -f_output[1] + fb_trans * pos_error[1]
+        twist_msg.twist.linear_z  = ff_trans * f_output[2]  + fb_trans * pos_error[2]
+        # twist_msg.twist.angular_x = ff_rot * -d_pitch / dt + fb_rot * ang_error[0]
+        # twist_msg.twist.angular_y = ff_rot * d_yaw / dt    + fb_rot * ang_error[1]
+        # twist_msg.twist.angular_z = ff_rot * -d_roll / dt  + fb_rot * ang_error[2]
+        # twist_msg.twist.linear_x  = ff_trans * -cartesian_linear_vel[0] + fb_trans * pos_error[0]
+        # twist_msg.twist.linear_y  = ff_trans * -cartesian_linear_vel[1] + fb_trans * pos_error[1]
+        # twist_msg.twist.linear_z  = ff_trans * cartesian_linear_vel[2]  + fb_trans * pos_error[2]
 
         self.twist_cmd_pub.publish(twist_msg)
 
