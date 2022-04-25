@@ -12,9 +12,10 @@ import time
 from tf.transformations import euler_from_quaternion, quaternion_from_euler, quaternion_multiply
 import tf2_ros
 from kortex_driver.srv import *
-from kortex_driver.msg import TwistCommand, Twist, Finger, GripperMode
+from kortex_driver.msg import *
 
 PI = 3.141592653
+HOME_Q = [270, 245.38, 180, 271, 0, 334, 270]
 
 def quaternion_diff(q1, q2):
     """
@@ -66,6 +67,7 @@ class ViveController(object): #RENAME to something
         self.prev_pose = Pose()
         self.prev_t = Time()
         self.filter = Filter()
+        self.gripped = 0
 
         # Initialize robot position
         self.init_robot_position = []
@@ -103,7 +105,59 @@ class ViveController(object): #RENAME to something
         rospy.wait_for_service(execute_action_full_name)
         self.execute_action = rospy.ServiceProxy(execute_action_full_name, ExecuteAction)
 
+        validate_waypoint_list_full_name = '/' + self.robot_name + '/base/validate_waypoint_list'
+        rospy.wait_for_service(validate_waypoint_list_full_name)
+        self.validate_waypoint_list = rospy.ServiceProxy(validate_waypoint_list_full_name, ValidateWaypointList)
+
+        rospy.loginfo("Homing Robot!")
+        self.send_joint_traj(HOME_Q)
+
+    def send_joint_traj(self, traj):
+        MAX_ANGULAR_DURATION = 30
+        self.last_action_notif_type = None
+
+        req = ExecuteActionRequest()
+
+        trajectory = WaypointList()
+        waypoints = Waypoint()
+        angularWaypoint = AngularWaypoint()
         
+        angular_duration = 1
+        angularWaypoint.angles = traj
+        angularWaypoint.duration = angular_duration
+        waypoints.oneof_type_of_waypoint.angular_waypoint.append(angularWaypoint)
+        trajectory.duration = 0
+        trajectory.use_optimal_blending = False
+        trajectory.waypoints.append(waypoints)
+        
+        while (True) :
+            try:
+                res = self.validate_waypoint_list(trajectory)
+            except rospy.ServiceException:
+                rospy.logerr("Failed to call ValidateWaypointList")
+                return False
+            error_number = len(res.output.trajectory_error_report.trajectory_error_elements)
+
+            if (error_number >= 1 and angular_duration != MAX_ANGULAR_DURATION):
+                angularWaypoint.duration = angular_duration
+                angular_duration += 1
+
+            elif (angular_duration == MAX_ANGULAR_DURATION) :
+                # It should be possible to reach position within 30s
+                # WaypointList is invalid (other error than angularWaypoint duration)
+                rospy.loginfo("WaypointList is invalid")
+                return False
+
+            else:
+                break
+
+
+        req.input.oneof_action_parameters.execute_waypoint_list.append(trajectory)
+        try:
+            self.execute_action(req)
+        except rospy.ServiceException:
+            rospy.logerr("Failed to call ExecuteWaypointjectory")
+            return False
 
     # Constantly updates the current controller pose
     def controller_cb(self, msg):
@@ -153,20 +207,27 @@ class ViveController(object): #RENAME to something
     # Stops all movement and quits if grip is pushed
     def grip_cb(self, msg):
         if msg.data:
-            self.tracker_sub.unregister()
-            req = SendGripperCommandRequest()
-            finger = Finger()
-            finger.finger_identifier = 0
-            req.input.gripper.finger.append(finger)
-            req.input.mode = GripperMode.GRIPPER_POSITION
-            finger.value = 0
-            self.send_gripper_command(req)
+            if self.gripped:
+                self.gripped = msg.data
+                return
+            if self.set_init:
+                self.set_init = False
+                time.sleep(0.1)
+                req = SendGripperCommandRequest()
+                finger = Finger()
+                finger.finger_identifier = 0
+                req.input.gripper.finger.append(finger)
+                req.input.mode = GripperMode.GRIPPER_POSITION
+                finger.value = 0
+                self.send_gripper_command(req)
 
-            twist_msg = TwistCommand()
-            self.twist_cmd_pub.publish(twist_msg)
-            time.sleep(0.5)
-            rospy.signal_shutdown(reason="User signalled to stop")
-            print("Stopped the node")
+                twist_msg = TwistCommand()
+                self.twist_cmd_pub.publish(twist_msg)
+                time.sleep(0.5)
+            else:
+                self.set_init_pose()
+        self.gripped = msg.data
+
 
     def joint_cb(self, msg):
         # The joint angle range of JointState is -pi~pi, we need to convert it into 0~2pi
@@ -208,7 +269,6 @@ class ViveController(object): #RENAME to something
         quat_err  = quaternion_multiply(quat_diff, self.init_quat_diff_inv)
         pos_error, ang_error = self.calculate_pose_error(controller_pos_diff, quat_err)
 
-        # TODO: Add a low pass filter here
         twist_msg = TwistCommand()
         twist_msg.reference_frame = 0
         ff_rot= 1.0
@@ -220,20 +280,12 @@ class ViveController(object): #RENAME to something
         # Output format is [velx, vely, velz, pitch, yaw, roll]
         f_output = self.filter.moving_average_filter(input=filter_input)
 
-
-
         twist_msg.twist.angular_x = ff_rot * -f_output[3] / dt + fb_rot * ang_error[0]
         twist_msg.twist.angular_y = ff_rot * f_output[4] / dt    + fb_rot * ang_error[1]
         twist_msg.twist.angular_z = ff_rot * -f_output[5] / dt  + fb_rot * ang_error[2]
-        twist_msg.twist.linear_x  = ff_trans * -f_output[0] + fb_trans * pos_error[0]
-        twist_msg.twist.linear_y  = ff_trans * -f_output[1] + fb_trans * pos_error[1]
-        twist_msg.twist.linear_z  = ff_trans * f_output[2]  + fb_trans * pos_error[2]
-        # twist_msg.twist.angular_x = ff_rot * -d_pitch / dt + fb_rot * ang_error[0]
-        # twist_msg.twist.angular_y = ff_rot * d_yaw / dt    + fb_rot * ang_error[1]
-        # twist_msg.twist.angular_z = ff_rot * -d_roll / dt  + fb_rot * ang_error[2]
-        # twist_msg.twist.linear_x  = ff_trans * -cartesian_linear_vel[0] + fb_trans * pos_error[0]
-        # twist_msg.twist.linear_y  = ff_trans * -cartesian_linear_vel[1] + fb_trans * pos_error[1]
-        # twist_msg.twist.linear_z  = ff_trans * cartesian_linear_vel[2]  + fb_trans * pos_error[2]
+        twist_msg.twist.linear_x  = ff_trans * -f_output[1]  + fb_trans * pos_error[0]
+        twist_msg.twist.linear_y  = ff_trans * f_output[2]   + fb_trans * pos_error[1]
+        twist_msg.twist.linear_z  = ff_trans * -f_output[0]  + fb_trans * pos_error[2]
 
         self.twist_cmd_pub.publish(twist_msg)
 
@@ -243,26 +295,25 @@ class ViveController(object): #RENAME to something
         robot_pos_diff = robot_pos - self.init_robot_position
 
         # Get error between controller diff and robot diff
-        pos_error = [-controller_pos_diff[0], -controller_pos_diff[1], controller_pos_diff[2]] - robot_pos_diff
+        pos_error = [-controller_pos_diff[1], controller_pos_diff[2], -controller_pos_diff[0]] - robot_pos_diff
         
         ang_error = euler_from_quaternion(quat_err)
 
         return pos_error, ang_error
 
     def set_init_pose(self):
-        key = None
-        while key != '':
-            key = input("Press enter to set the intial position of the vr controller, or \"h\" to home the robot\n")
-            if key == 'h':
-                req = ReadActionRequest()
-                req.input.identifier = 2 # Home action identifier
-                res = self.read_action(req)
-                req = ExecuteActionRequest()
-                req.input = res.output
-                self.execute_action(req)
-                time.sleep(1)
-        # input("Press enter to set the initial position of the vr controller")
-        # self.init_joint_stat = self.joint_stat
+        # key = None
+        # while key != '':
+        #     key = input("Press enter to set the intial position of the vr controller, or \"h\" to home the robot\n")
+        #     if key == 'h':
+        #         req = ReadActionRequest()
+        #         req.input.identifier = 2 # Home action identifier
+        #         res = self.read_action(req)
+        #         req = ExecuteActionRequest()
+        #         req.input = res.output
+        #         self.execute_action(req)
+        #         time.sleep(1)
+
         init_robot_pose = self.tf_buffer.lookup_transform("base_link", "tool_frame", rospy.Time()).transform
         self.init_robot_position = np.array([init_robot_pose.translation.x, 
                                              init_robot_pose.translation.y, 
@@ -281,5 +332,5 @@ class ViveController(object): #RENAME to something
 if __name__ == "__main__":
     rospy.init_node("vive_controller_node", log_level=rospy.INFO)
     controller = ViveController()
-    controller.set_init_pose()
+    # controller.set_init_pose()
     rospy.spin()
