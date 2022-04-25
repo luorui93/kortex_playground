@@ -1,6 +1,7 @@
 <launch>
 <arg name="robot_name" default="my_gen3"/>
 <arg name="start_rviz" default="true" />
+<arg name="vision"     default="false" />
 
 <!-- bring up robot driver -->
     <include file="$(find kortex_driver)/launch/kortex_driver.launch">
@@ -13,8 +14,11 @@
         <arg name="start_moveit" value="false"/>
         <arg name="cyclic_data_publish_rate" value="100"/>
     </include>
+    <include if="$(arg vision)" file="$(find kortex_playground)/launch/kinova_vision.launch"/>
     <!-- Start RViz -->
     <group ns="$(arg robot_name)">
         <node name="rviz" pkg="rviz" type="rviz" output="log" args="-f base_link -d $(find kortex_playground)/rviz/view.rviz" if="$(arg start_rviz)"/> 
     </group>
+
+    <node pkg="tf2_ros" type="static_transform_publisher" name="world_baselink_tf" args="0 0 1 1.57 0 1.57 world base_link" />
 </launch>
