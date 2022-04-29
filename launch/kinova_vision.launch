@@ -1,0 +1,9 @@
+<launch>
+<arg name="robot_name" default="my_gen3"/>
+<arg name="start_rviz" default="true" />
+
+<!-- bring up robot driver -->
+    <include file="$(find kinova_vision)/launch/kinova_vision.launch">
+        <arg name="device" value="10.75.15.10"/>
+    </include>
+</launch>
