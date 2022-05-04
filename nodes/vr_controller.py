@@ -1,25 +1,42 @@
 #! /usr/bin/env python
 
 import rospy
+import rospkg
 import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped, TransformStamped, Transform
 from std_msgs.msg import Time, Float32, Bool
 from rospy.rostime import Duration
 from sensor_msgs.msg import JointState
-from multiprocessing import Lock
-import copy
-import time
 from tf.transformations import euler_from_quaternion, quaternion_from_euler, quaternion_multiply
 import tf2_ros
+
+import copy
+import time
+from multiprocessing import Lock
+import csv
+
 from kortex_driver.srv import *
 from kortex_driver.msg import *
 
 PI = 3.141592653
-HOME_Q = [270, 245.38, 180, 271, 0, 334, 270]
+HOME_Q = [270, 251.04, 180, 290, 0, 320.77, 270]
+# Translation matrix: express unity frame in base_link frame
+T_BU = [
+    [0, -1, 0],
+    [0, 0, 1],
+    [-1, 0, 0]
+    ]
+# Rotation matrix: Express unity frame in tool_frame frame
+R_TU = [
+    [0, -1, 0],
+    [0, 0, 1],
+    [-1, 0, 0]
+]
 
 def quaternion_diff(q1, q2):
     """
-    Calculate the relative quaternion to rotate from q2 to q1
+    Calculate the relative quaternion to rotate from q2 to q1 such that
+    diff * q2 = q1
     """
     q2_inv = copy.copy(q2)
     q2_inv[3] = -q2_inv[3]
@@ -54,7 +71,7 @@ class Filter(object):
         return output
 
 class ViveController(object): #RENAME to something
-    def __init__(self):
+    def __init__(self, shared_control=False):
         super().__init__()
     
         # Initializes initial poses as empty until the user decides to set themwrist_pose
@@ -68,11 +85,16 @@ class ViveController(object): #RENAME to something
         self.prev_t = Time()
         self.filter = Filter()
         self.gripped = 0
+        self.shared_control = shared_control
+
+        # Generate transformation matrix
+        padding = np.zeros((3,3))
+        self.T = np.asarray(np.bmat([[T_BU, padding], [padding, R_TU]]))
 
         # Initialize robot position
         self.init_robot_position = []
         self.init_robot_ori_inv = []
-        self.cur_robot_pose = Transform()
+        self.cur_tool_frame = Transform()
         self.joint_stat = []
 
         # Get node params
@@ -111,6 +133,15 @@ class ViveController(object): #RENAME to something
 
         rospy.loginfo("Homing Robot!")
         self.send_joint_traj(HOME_Q)
+
+        # Turn on/off shared control
+        if self.shared_control:
+            rospack = rospkg.RosPack()
+            exp_traj_path = rospack.get_path('jaco3_camera_proc') + '/data/exp_traj.csv'
+            with open(exp_traj_path, 'r', newline='') as f:
+                reader = csv.reader(f, delimiter=',')
+                self.exp_traj = list(reader)
+            rospy.loginfo("Successfully read expert trajectory from file.")
 
     def send_joint_traj(self, traj):
         MAX_ANGULAR_DURATION = 30
@@ -261,12 +292,13 @@ class ViveController(object): #RENAME to something
         d_roll, d_pitch, d_yaw = euler_from_quaternion(angular_diff, axes='sxyz')
 
         # Calculate position and orientation error / Feed backward
-        self.cur_robot_pose = self.tf_buffer.lookup_transform("base_link", "tool_frame", rospy.Time()).transform
+        self.cur_tool_frame = self.tf_buffer.lookup_transform("base_link", "tool_frame", rospy.Time()).transform
         controller_pos_diff = cur_pos - self.init_controller_position
 
-        cur_quat = self.tf_buffer.lookup_transform("tool_frame", "vr_controller", rospy.Time()).transform.rotation
-        quat_diff = [cur_quat.x, cur_quat.y, cur_quat.z, cur_quat.w]
-        quat_err  = quaternion_multiply(quat_diff, self.init_quat_diff_inv)
+        tf_quat = self.tf_buffer.lookup_transform("tool_frame", \
+                                "vr_controller", rospy.Time()).transform.rotation
+        cur_quat = [tf_quat.x, tf_quat.y, tf_quat.z, tf_quat.w]
+        quat_err  = quaternion_multiply(cur_quat, self.init_quat_diff_inv)
         pos_error, ang_error = self.calculate_pose_error(controller_pos_diff, quat_err)
 
         twist_msg = TwistCommand()
@@ -276,26 +308,67 @@ class ViveController(object): #RENAME to something
         fb_rot = 0.5
         fb_trans = 0.5
 
-        filter_input = np.append(cartesian_linear_vel, [d_pitch, d_yaw, d_roll])
-        # Output format is [velx, vely, velz, pitch, yaw, roll]
+        filter_input = np.append(cartesian_linear_vel, [d_roll, d_pitch, d_yaw])
+        # Output format is [velx, vely, velz, roll, pitch, yaw]
         f_output = self.filter.moving_average_filter(input=filter_input)
 
-        twist_msg.twist.angular_x = ff_rot * -f_output[3] / dt + fb_rot * ang_error[0]
-        twist_msg.twist.angular_y = ff_rot * f_output[4] / dt    + fb_rot * ang_error[1]
-        twist_msg.twist.angular_z = ff_rot * -f_output[5] / dt  + fb_rot * ang_error[2]
-        twist_msg.twist.linear_x  = ff_trans * -f_output[1]  + fb_trans * pos_error[0]
-        twist_msg.twist.linear_y  = ff_trans * f_output[2]   + fb_trans * pos_error[1]
-        twist_msg.twist.linear_z  = ff_trans * -f_output[0]  + fb_trans * pos_error[2]
+        ee_twist = self.T @ np.array(f_output)[:,np.newaxis]
+        ee_twist = ee_twist.flatten()
+
+        if not self.shared_control:
+            twist_msg.twist.linear_x  = ff_trans * ee_twist[0]  + fb_trans * pos_error[0]
+            twist_msg.twist.linear_y  = ff_trans * ee_twist[1]  + fb_trans * pos_error[1]
+            twist_msg.twist.linear_z  = ff_trans * ee_twist[2]  + fb_trans * pos_error[2]
+            twist_msg.twist.angular_x = ff_rot * ee_twist[3] / dt + fb_rot * ang_error[0]
+            twist_msg.twist.angular_y = ff_rot * ee_twist[4] / dt + fb_rot * ang_error[1]
+            twist_msg.twist.angular_z = ff_rot * ee_twist[5] / dt + fb_rot * ang_error[2]
+
+        else:
+            # The tf data is from base_link to tool_frame
+            p_bt = [self.cur_tool_frame.translation.x, 
+                 self.cur_tool_frame.translation.y,
+                 self.cur_tool_frame.translation.z]
+            ref_pose = self.get_ref_pose_from_exp_traj(p_bt)
+            linear_diff = np.array(ref_pose[0:3]) - np.array(p_bt)
+            q_bt0 = ref_pose[3:-1]
+            # q_tt0 = q_tb * q_bt0 (equation to calculate the difference where q_tb = cur_quat)
+            quat_diff = quaternion_multiply(cur_quat, q_bt0)
+            rpy_diff = euler_from_quaternion(quat_diff)
+
 
         self.twist_cmd_pub.publish(twist_msg)
 
+    def get_ref_pose_from_exp_traj(self, p):
+        # Get reference/optimal pose at given position from expert trajectory
+        min_d = 10000000
+        min_x = None
+        ind = 0
+        start = time.monotonic()
+        for x in self.exp_traj:
+            # d = np.linalg.norm(np.array(x[0:3]) - np.array(x_0))
+            d = np.array(x[0:3]) - np.array(p)
+            d = np.sqrt(d[0]**2 + d[1]**2 + d[2]**2)
+            if d < min_d:
+                min_d = d
+                min_x = x[0:3]
+                ind += 1
+        end = time.monotonic()
+        print(f"Trajectory length: {len(self.exp_traj)}")
+        print(f"Found nearest point at index: {ind}, {min_x}, minimal distance: {min_d}")
+        print(f"Search took {1000*(end-start)}ms")
+        return self.exp_traj[ind]
+
     def calculate_pose_error(self, controller_pos_diff, quat_err):        
-        # Get robot's linear difference
-        robot_pos = np.array([self.cur_robot_pose.translation.x, self.cur_robot_pose.translation.y, self.cur_robot_pose.translation.z])
+        # Get robot's linear change
+        robot_pos = np.array([self.cur_tool_frame.translation.x, 
+                              self.cur_tool_frame.translation.y, 
+                              self.cur_tool_frame.translation.z])
         robot_pos_diff = robot_pos - self.init_robot_position
 
         # Get error between controller diff and robot diff
-        pos_error = [-controller_pos_diff[1], controller_pos_diff[2], -controller_pos_diff[0]] - robot_pos_diff
+        c_pos_diff = np.array(T_BU) @ np.array(controller_pos_diff)[:, np.newaxis]
+        c_pos_diff = c_pos_diff.flatten()
+        pos_error = c_pos_diff - robot_pos_diff
         
         ang_error = euler_from_quaternion(quat_err)
 
@@ -321,7 +394,9 @@ class ViveController(object): #RENAME to something
         init_quat = self.tf_buffer.lookup_transform("tool_frame", "vr_controller", rospy.Time()).transform.rotation
         self.init_quat_diff_inv = [init_quat.x, init_quat.y, init_quat.z, -init_quat.w]
 
-        self.init_controller_position = [self.cur_pose.position.x, self.cur_pose.position.y, self.cur_pose.position.z]
+        self.init_controller_position = [self.cur_pose.position.x, 
+                                         self.cur_pose.position.y, 
+                                         self.cur_pose.position.z]
         
         print("Initial controller position set as: ", self.init_controller_position)
         
@@ -331,6 +406,6 @@ class ViveController(object): #RENAME to something
 
 if __name__ == "__main__":
     rospy.init_node("vive_controller_node", log_level=rospy.INFO)
-    controller = ViveController()
+    controller = ViveController(shared_control=False)
     # controller.set_init_pose()
     rospy.spin()
