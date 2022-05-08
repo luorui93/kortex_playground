@@ -4,11 +4,12 @@
 <arg name="vision"     default="false" />
 
 <!-- bring up robot driver -->
-    <include file="$(find kortex_driver)/launch/kortex_driver.launch">
+    <include file="$(find kortex_playground)/launch/kortex_driver.launch">
         <arg name="ip_address" value="10.75.15.10"/>
         <arg name="start_rviz" value="false"/>
         <arg name="robot_name" value="$(arg robot_name)"/>
-        <arg name="gripper"    value="robotiq_2f_85"/>
+        <!-- <arg name="gripper"    value="robotiq_2f_85"/> -->
+        <arg name="gripper"    value="loop_handle"/>
         <arg name="username"   value="river"/>
         <arg name="password"   value="river"/>
         <arg name="start_moveit" value="false"/>
