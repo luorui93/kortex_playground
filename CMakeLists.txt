@@ -15,7 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
     kdl_parser
 )
 
-find_package(Eigen REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 ## System dependencies are found with CMake's conventions
 
