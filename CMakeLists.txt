@@ -12,7 +12,6 @@ find_package(catkin REQUIRED COMPONENTS
     sensor_msgs
     moveit_msgs
     tf
-    kortex_driver
 )
 
 ## System dependencies are found with CMake's conventions
