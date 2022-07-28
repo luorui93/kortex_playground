@@ -27,7 +27,7 @@ class KeyboardController:
 
         self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
         self.trans_vector_sub = rospy.Subscriber("/trans_vector", PointStamped, self.trans_vector_cb)
-        self.rot_vector_sub = rospy.Subscriber("/rot_vector", PointStamped, self.rot_vector_cb)
+        self.rot_vector_sub = rospy.Subscriber("/total_rot_vector", PointStamped, self.rot_vector_cb)
 
 
         self.listener = keyboard.Listener(on_press=self.on_press, on_release = self.on_release)
@@ -66,9 +66,12 @@ class KeyboardController:
                 if self.current_key == 'g':
                     twist_msg.twist.angular_z = -0.1
 
-                twist_msg.twist.linear_x += self.trans_vector[0]
-                twist_msg.twist.linear_y += self.trans_vector[1]
-                twist_msg.twist.linear_z += self.trans_vector[2]
+                # twist_msg.twist.linear_x += self.trans_vector[0]
+                # twist_msg.twist.linear_y += self.trans_vector[1]
+                # twist_msg.twist.linear_z += self.trans_vector[2]
+                twist_msg.twist.angular_x += self.rot_vector[0]
+                twist_msg.twist.angular_y += self.rot_vector[1]
+                twist_msg.twist.angular_z += self.rot_vector[2]
 
                   
 
