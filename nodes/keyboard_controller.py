@@ -23,6 +23,7 @@ class KeyboardController:
     def __init__(self):
         self.robot_name = "my_gen3"
         self.trans_vector = [0, 0, 0]
+        self.rot_vector = [0, 0, 0]
 
 
         self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
