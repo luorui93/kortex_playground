@@ -66,9 +66,9 @@ class KeyboardController:
                 if self.current_key == 'g':
                     twist_msg.twist.angular_z = -0.1
 
-                # twist_msg.twist.linear_x += self.trans_vector[0]
-                # twist_msg.twist.linear_y += self.trans_vector[1]
-                # twist_msg.twist.linear_z += self.trans_vector[2]
+                twist_msg.twist.linear_x += self.trans_vector[0]
+                twist_msg.twist.linear_y += self.trans_vector[1]
+                twist_msg.twist.linear_z += self.trans_vector[2]
                 twist_msg.twist.angular_x += self.rot_vector[0]
                 twist_msg.twist.angular_y += self.rot_vector[1]
                 twist_msg.twist.angular_z += self.rot_vector[2]
