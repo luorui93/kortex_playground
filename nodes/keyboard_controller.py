@@ -24,6 +24,8 @@ class KeyboardController:
         self.robot_name = "my_gen3"
         self.trans_vector = [0, 0, 0]
         self.rot_vector = [0, 0, 0]
+        self.rot_speed = 0.5
+        self.trans_speed = 0.25
 
 
         self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
@@ -36,43 +38,46 @@ class KeyboardController:
         self.current_key = ""
         self.keyboard_control()
 
+        
     def keyboard_control(self):
         
         while (self.listener.is_alive()):
-            while(self.current_key != ''):
+            # while(self.current_key != ''):
+            while(True):
                 twist_msg = TwistCommand()
                 twist_msg.reference_frame = 1
                 if self.current_key == 'w':
-                    twist_msg.twist.linear_x = 0.5
+                    twist_msg.twist.linear_x = self.trans_speed
                 if self.current_key == 's':
-                    twist_msg.twist.linear_x = -0.5
+                    twist_msg.twist.linear_x = -self.trans_speed
                 if self.current_key == 'a':
-                    twist_msg.twist.linear_y = 0.5
+                    twist_msg.twist.linear_y = self.trans_speed
                 if self.current_key == 'd':
-                    twist_msg.twist.linear_y = -0.5
-                if self.current_key == 'z':
-                    twist_msg.twist.linear_z = 0.5
+                    twist_msg.twist.linear_y = -self.trans_speed
                 if self.current_key == 'x':
-                    twist_msg.twist.linear_z = -0.5
+                    twist_msg.twist.linear_z = self.trans_speed
+                if self.current_key == 'c':
+                    twist_msg.twist.linear_z = -self.trans_speed
                 if self.current_key == 'q':
-                    twist_msg.twist.angular_x = -0.1
+                    twist_msg.twist.angular_x = -self.rot_speed
                 if self.current_key == 'e':
-                    twist_msg.twist.angular_x = 0.1
+                    twist_msg.twist.angular_x = self.rot_speed
                 if self.current_key == 'r':
-                    twist_msg.twist.angular_y = 0.1
+                    twist_msg.twist.angular_y = self.rot_speed
                 if self.current_key == 't':
-                    twist_msg.twist.angular_y = -0.1
+                    twist_msg.twist.angular_y = -self.rot_speed
                 if self.current_key == 'f':
-                    twist_msg.twist.angular_z = 0.1
+                    twist_msg.twist.angular_z = self.rot_speed
                 if self.current_key == 'g':
-                    twist_msg.twist.angular_z = -0.1
+                    twist_msg.twist.angular_z = -self.rot_speed
 
-                twist_msg.twist.linear_x += self.trans_vector[0]
-                twist_msg.twist.linear_y += self.trans_vector[1]
-                twist_msg.twist.linear_z += self.trans_vector[2]
-                twist_msg.twist.angular_x += self.rot_vector[0]
-                twist_msg.twist.angular_y += self.rot_vector[1]
-                twist_msg.twist.angular_z += self.rot_vector[2]
+                # twist_msg.twist.linear_x += self.trans_vector[0]
+                # twist_msg.twist.linear_y += self.trans_vector[1]
+                # twist_msg.twist.linear_z += self.trans_vector[2]
+                rot_scalar = 100
+                twist_msg.twist.angular_x += self.rot_vector[0] * rot_scalar
+                twist_msg.twist.angular_y += self.rot_vector[1] * rot_scalar
+                twist_msg.twist.angular_z += self.rot_vector[2] * rot_scalar
 
                   
 
