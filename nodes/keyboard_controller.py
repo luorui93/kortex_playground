@@ -45,7 +45,7 @@ class KeyboardController:
             # while(self.current_key != ''):
             while(True):
                 twist_msg = TwistCommand()
-                twist_msg.reference_frame = 1
+                twist_msg.reference_frame = 0
                 if self.current_key == 'w':
                     twist_msg.twist.linear_x = self.trans_speed
                 if self.current_key == 's':
@@ -71,13 +71,12 @@ class KeyboardController:
                 if self.current_key == 'g':
                     twist_msg.twist.angular_z = -self.rot_speed
 
-                # twist_msg.twist.linear_x += self.trans_vector[0]
-                # twist_msg.twist.linear_y += self.trans_vector[1]
-                # twist_msg.twist.linear_z += self.trans_vector[2]
-                rot_scalar = 100
-                twist_msg.twist.angular_x += self.rot_vector[0] * rot_scalar
-                twist_msg.twist.angular_y += self.rot_vector[1] * rot_scalar
-                twist_msg.twist.angular_z += self.rot_vector[2] * rot_scalar
+                twist_msg.twist.linear_x += self.trans_vector[0]
+                twist_msg.twist.linear_y += self.trans_vector[1]
+                twist_msg.twist.linear_z += self.trans_vector[2]
+                twist_msg.twist.angular_x += self.rot_vector[0]
+                twist_msg.twist.angular_y += self.rot_vector[1]
+                twist_msg.twist.angular_z += self.rot_vector[2]
 
                   
 
