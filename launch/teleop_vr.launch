@@ -1,4 +1,4 @@
 <launch>
-    <node pkg="tf2_ros" type="static_transform_publisher" name="unity_frame_broadcaster" args="1 -1 0 3.14 0 0 world unity" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="unity_frame_broadcaster" args="1 -1 0 0 0 0 world unity" />
     <node pkg="kortex_playground" type="vr_controller.py" name="vr_controller_node" output="screen"/>
-</launch>
+</launch>   

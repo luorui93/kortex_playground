@@ -21,5 +21,5 @@
         <node name="rviz" pkg="rviz" type="rviz" output="log" args="-f base_link -d $(find kortex_playground)/rviz/view.rviz" if="$(arg start_rviz)"/> 
     </group>
 
-    <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="world_baselink_tf" args="0 0 1 1.57 0 1.57 world base_link" /> -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="world_baselink_tf" args="0 0 1 0 0 0 world base_link" />
 </launch>
