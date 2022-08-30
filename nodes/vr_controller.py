@@ -137,7 +137,7 @@ class ViveController(object): #RENAME to something
         self.grip_sub = rospy.Subscriber("/grip", Bool, self.grip_cb, queue_size=1)
 
         self.correction_sub = rospy.Subscriber("/resultant_wrench", WrenchStamped, self.correction_cb, queue_size=1)
-        self.resultant_vector = np.zeros(6)
+        self.correction_vector = np.zeros(6)
         
 
         # Initialize services
@@ -452,7 +452,7 @@ class ViveController(object): #RENAME to something
         twist_msg.twist.angular_y += self.correction_vector[4]
         twist_msg.twist.angular_z += self.correction_vector[5]
 
-        print(twist_msg)
+        # print(twist_msg)
 
         self.twist_cmd_pub.publish(twist_msg)
 
