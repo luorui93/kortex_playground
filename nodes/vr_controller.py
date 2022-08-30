@@ -21,6 +21,10 @@ from kortex_driver.msg import *
 PI = 3.141592653
 HOME_Q = [270, 251.04, 180, 290, 0, 320.77, 270]
 HOME_1 = [180, 15, 180, 300, 0, 200, 90]
+
+# Hack solution to solve the redundant TF warning in simulation
+PREV_TF_STAMP = 0
+PREV_TF_COUNT = 0
 # Translation matrix: express unity frame in base_link frame
 # T_BU = [
 #     [0, -1, 0],
@@ -289,6 +293,9 @@ class ViveController(object): #RENAME to something
 
     # Constantly updates the current controller pose
     def controller_cb(self, msg):
+        global PREV_TF_STAMP
+        global PREV_TF_COUNT
+
         self.prev_pose = copy.deepcopy(self.cur_pose)
         self.prev_t = copy.deepcopy(self.cur_t)
         self.cur_pose = msg.pose
@@ -308,7 +315,12 @@ class ViveController(object): #RENAME to something
         # Time.now() might return the same time thus creating a tf with duplicate time stamp.
         # This is the cause of the following warning:
         # TF_REPEATED_DATA ignoring data with redundant timestamp for frame vr_controller
-        t.header.stamp = rospy.Time.now()       
+        t.header.stamp = rospy.Time.now() 
+        if t.header.stamp == PREV_TF_STAMP:
+            PREV_TF_COUNT += 1
+            t.header.stamp.nsecs += PREV_TF_COUNT * 10
+        else:
+            PREV_TF_COUNT = 0
         # print(t.header.stamp)
         t.header.frame_id = "unity"
         t.child_frame_id = "vr_controller"
@@ -319,6 +331,8 @@ class ViveController(object): #RENAME to something
         t.transform.rotation.y = self.cur_pose.orientation.y
         t.transform.rotation.z = self.cur_pose.orientation.z
         t.transform.rotation.w = self.cur_pose.orientation.w
+
+        PREV_TF_STAMP = rospy.Time.now()
 
         self.br.sendTransform(t)
         test_msg = self.cur_pose.position.x
