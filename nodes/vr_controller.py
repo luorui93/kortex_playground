@@ -113,6 +113,7 @@ class ViveController(object): #RENAME to something
         self.filter = Filter()
         self.gripped = 0
         self.shared_control = shared_control
+        self.repulsive_control = False
 
         # Generate transformation matrix
         padding = np.zeros((3,3))
@@ -139,6 +140,7 @@ class ViveController(object): #RENAME to something
         self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
         self.trigger_sub = rospy.Subscriber("/trigger", Float32, self.trigger_cb, queue_size=1)
         self.grip_sub = rospy.Subscriber("/grip", Bool, self.grip_cb, queue_size=1)
+        self.teleport_sub = rospy.Subscriber("/teleport", Bool, self.teleport_cb, queue_size=1)
 
         self.correction_sub = rospy.Subscriber("/resultant_wrench", WrenchStamped, self.correction_cb, queue_size=1)
         self.correction_vector = np.zeros(6)
@@ -161,10 +163,10 @@ class ViveController(object): #RENAME to something
         rospy.wait_for_service(validate_waypoint_list_full_name)
         self.validate_waypoint_list = rospy.ServiceProxy(validate_waypoint_list_full_name, ValidateWaypointList)
 
-        rospy.loginfo("Homing Robot!")
-        # self.send_j   oint_traj(HOME_Q)
+        # rospy.loginfo("Homing Robot!")
+        # # self.send_j   oint_traj(HOME_Q)
         self.HOME_ACTION_IDENTIFIER = 2
-        self.home_the_robot()
+        # self.home_the_robot()
 
         twist_msg = TwistCommand()
         twist_msg.reference_frame = 1
@@ -178,19 +180,10 @@ class ViveController(object): #RENAME to something
                 reader = csv.reader(f, delimiter=',')
                 self.exp_traj = list(reader)
             rospy.loginfo("Successfully read expert trajectory from file.")
+        
+        rospy.loginfo("Starting teleoperation with VR controller")
 
     def set_init_pose(self):
-        # key = None
-        # while key != '':
-        #     key = input("Press enter to set the intial position of the vr controller, or \"h\" to home the robot\n")
-        #     if key == 'h':
-        #         req = ReadActionRequest()
-        #         req.input.identifier = 2 # Home action identifier
-        #         res = self.read_action(req)
-        #         req = ExecuteActionRequest()
-        #         req.input = res.output
-        #         self.execute_action(req)
-        #         time.sleep(1)
 
         init_robot_pose = self.tf_buffer.lookup_transform("base_link", EE_FRAME, rospy.Time()).transform
         self.init_robot_position = np.array([init_robot_pose.translation.x, 
@@ -426,8 +419,8 @@ class ViveController(object): #RENAME to something
 
         twist_msg = TwistCommand()
         twist_msg.reference_frame = 1
-        ff_rot= 2.0
-        ff_trans = 1
+        ff_rot= 1.0
+        ff_trans = 1.0
         fb_rot = 0.5
         fb_trans = 0.5
 
@@ -439,12 +432,12 @@ class ViveController(object): #RENAME to something
         ee_twist = ee_twist.flatten()
 
         if not self.shared_control:
-            twist_msg.twist.linear_x  = ff_trans * ee_twist[0]# + fb_trans * pos_error[0]
-            twist_msg.twist.linear_y  = ff_trans * ee_twist[1]# + fb_trans * pos_error[1]
-            twist_msg.twist.linear_z  = ff_trans * ee_twist[2]# + fb_trans * pos_error[2]
-            twist_msg.twist.angular_x = ff_rot * ee_twist[3] / dt# + fb_rot * ang_error[0]
-            twist_msg.twist.angular_y = ff_rot * ee_twist[4] / dt# + fb_rot * ang_error[1]
-            twist_msg.twist.angular_z = ff_rot * ee_twist[5] / dt# + fb_rot * ang_error[2]
+            twist_msg.twist.linear_x  = ff_trans * ee_twist[0] + fb_trans * pos_error[0]
+            twist_msg.twist.linear_y  = ff_trans * ee_twist[1] + fb_trans * pos_error[1]
+            twist_msg.twist.linear_z  = ff_trans * ee_twist[2] + fb_trans * pos_error[2]
+            # twist_msg.twist.angular_x = ff_rot * ee_twist[3] / dt #+ fb_rot * ang_error[0]
+            # twist_msg.twist.angular_y = ff_rot * ee_twist[4] / dt #+ fb_rot * ang_error[1]
+            twist_msg.twist.angular_z = ff_rot * ee_twist[5] / dt #+ fb_rot * ang_error[2]
             
         else:
             # The tf data is from base_link to tool_frame
@@ -459,16 +452,47 @@ class ViveController(object): #RENAME to something
             rpy_diff = euler_from_quaternion(quat_diff)
         
         # Apply the correction vector
-        twist_msg.twist.linear_x += self.correction_vector[0]
-        twist_msg.twist.linear_y += self.correction_vector[1]
-        twist_msg.twist.linear_z += self.correction_vector[2]
-        twist_msg.twist.angular_x += self.correction_vector[3]
-        twist_msg.twist.angular_y += self.correction_vector[4]
-        twist_msg.twist.angular_z += self.correction_vector[5]
-
+        if self.repulsive_control:
+            twist_msg.twist = self.blend_twist(twist_msg.twist)
         # print(twist_msg)
 
         self.twist_cmd_pub.publish(twist_msg)
+
+    def blend_twist(self, s_t):
+        """
+        Blend user input with correction vector
+        Currently we only blend angular velocity around z axis
+        @param s_t current twist
+        """
+        delta_t = 0.025 # 40 Hz
+        damping = 0
+        I = 0.01
+        m = 0.4
+        w_tz = s_t.angular_z
+        v_t  = np.array([
+            s_t.linear_x,
+            s_t.linear_y,
+            s_t.linear_z
+        ])
+        tau_tz = self.correction_vector[5]
+        force_t = self.correction_vector[0:3]
+
+        dw = delta_t * (tau_tz - damping*w_tz) / I
+        dv = delta_t * (force_t - damping*v_t) / m
+        # print('tau_tz', tau_tz)
+        # print('w_tz', w_tz)
+        # print('dw ', dw)
+        # print('dv ', dv)
+
+        w_tz = w_tz + dw
+        s_t.angular_z = w_tz
+
+        v_z  = v_t  + dv
+        # s_t.linear_x = v_z[0]
+        # s_t.linear_y = v_z[1]
+        # s_t.linear_z = v_z[2]
+
+        return s_t
 
     def get_ref_pose_from_exp_traj(self, p):
         # Get reference/optimal pose at given position from expert trajectory
@@ -511,10 +535,15 @@ class ViveController(object): #RENAME to something
         self.correction_vector = np.array([msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z, \
                                             msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z])
         self.correction_vector = np.nan_to_num(self.correction_vector)
-
-        
-
-
+    
+    def teleport_cb(self, msg):
+        if msg.data == True:
+            self.repulsive_control = not self.repulsive_control
+            rospy.sleep(0.5)
+            if self.repulsive_control:
+                rospy.loginfo("Repulsive control on")
+            else:
+                rospy.loginfo("Repulsive control off")
         
 
 
