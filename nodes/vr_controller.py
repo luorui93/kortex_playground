@@ -3,7 +3,7 @@
 import rospy
 import rospkg
 import numpy as np
-from geometry_msgs.msg import Pose, PoseStamped, TransformStamped, Transform
+from geometry_msgs.msg import Pose, PoseStamped, TransformStamped, Transform, WrenchStamped, Wrench
 from std_msgs.msg import Time, Float32, Bool
 from rospy.rostime import Duration
 from sensor_msgs.msg import JointState
@@ -20,18 +20,45 @@ from kortex_driver.msg import *
 
 PI = 3.141592653
 HOME_Q = [270, 251.04, 180, 290, 0, 320.77, 270]
+HOME_1 = [180, 15, 180, 300, 0, 200, 90]
+
+# Hack solution to solve the redundant TF warning in simulation
+PREV_TF_STAMP = 0
+PREV_TF_COUNT = 0
 # Translation matrix: express unity frame in base_link frame
+# T_BU = [
+#     [0, -1, 0],
+#     [0, 0, 1],
+#     [-1, 0, 0]
+#     ]
 T_BU = [
-    [0, -1, 0],
+    [1, 0, 0],
+    [0, 1, 0],
     [0, 0, 1],
-    [-1, 0, 0]
     ]
 # Rotation matrix: Express unity frame in tool_frame frame
+# R_TU = [
+#     [0, -1, 0],
+#     [0, 0, 1],
+#     [-1, 0, 0]
+# ]
+
+# Real Robot
 R_TU = [
-    [0, -1, 0],
+    [0, 1, 0],
     [0, 0, 1],
-    [-1, 0, 0]
+    [1, 0, 0]
 ]
+
+# Simulation Robot
+# R_TU = [
+#     [1, 0, 0],
+#     [0, 1, 0],
+#     [0, 0, 1]
+# ]
+
+EE_FRAME = "tool_frame"
+# EE_FRAME = "test_frame"
 
 def quaternion_diff(q1, q2):
     """
@@ -86,6 +113,7 @@ class ViveController(object): #RENAME to something
         self.filter = Filter()
         self.gripped = 0
         self.shared_control = shared_control
+        self.repulsive_control = False
 
         # Generate transformation matrix
         padding = np.zeros((3,3))
@@ -112,6 +140,10 @@ class ViveController(object): #RENAME to something
         self.twist_cmd_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=1)
         self.trigger_sub = rospy.Subscriber("/trigger", Float32, self.trigger_cb, queue_size=1)
         self.grip_sub = rospy.Subscriber("/grip", Bool, self.grip_cb, queue_size=1)
+        self.teleport_sub = rospy.Subscriber("/teleport", Bool, self.teleport_cb, queue_size=1)
+
+        self.correction_sub = rospy.Subscriber("/resultant_wrench", WrenchStamped, self.correction_cb, queue_size=1)
+        self.correction_vector = np.zeros(6)
         
 
         # Initialize services
@@ -131,8 +163,14 @@ class ViveController(object): #RENAME to something
         rospy.wait_for_service(validate_waypoint_list_full_name)
         self.validate_waypoint_list = rospy.ServiceProxy(validate_waypoint_list_full_name, ValidateWaypointList)
 
-        rospy.loginfo("Homing Robot!")
-        self.send_joint_traj(HOME_Q)
+        # rospy.loginfo("Homing Robot!")
+        # # self.send_j   oint_traj(HOME_Q)
+        self.HOME_ACTION_IDENTIFIER = 2
+        # self.home_the_robot()
+
+        twist_msg = TwistCommand()
+        twist_msg.reference_frame = 1
+        self.twist_cmd_pub.publish(twist_msg)
 
         # Turn on/off shared control
         if self.shared_control:
@@ -142,6 +180,62 @@ class ViveController(object): #RENAME to something
                 reader = csv.reader(f, delimiter=',')
                 self.exp_traj = list(reader)
             rospy.loginfo("Successfully read expert trajectory from file.")
+        
+        rospy.loginfo("Starting teleoperation with VR controller")
+
+    def set_init_pose(self):
+
+        init_robot_pose = self.tf_buffer.lookup_transform("base_link", EE_FRAME, rospy.Time()).transform
+        self.init_robot_position = np.array([init_robot_pose.translation.x, 
+                                             init_robot_pose.translation.y, 
+                                             init_robot_pose.translation.z])
+        init_quat = self.tf_buffer.lookup_transform(EE_FRAME, "vr_controller", rospy.Time()).transform.rotation
+        self.init_quat_diff_inv = [init_quat.x, init_quat.y, init_quat.z, -init_quat.w]
+
+        self.init_controller_position = [self.cur_pose.position.x, 
+                                         self.cur_pose.position.y, 
+                                         self.cur_pose.position.z]
+        
+        print("Initial controller position set as: ", self.init_controller_position)
+        
+        self.set_init = True
+
+    def wait_for_action_end_or_abort(self):
+        while not rospy.is_shutdown():
+            if (self.last_action_notif_type == ActionEvent.ACTION_END):
+                rospy.loginfo("Received ACTION_END notification")
+                return True
+            elif (self.last_action_notif_type == ActionEvent.ACTION_ABORT):
+                rospy.loginfo("Received ACTION_ABORT notification")
+                return False
+            else:
+                time.sleep(0.01)
+
+    def home_the_robot(self):
+        # The Home Action is used to home the robot. It cannot be deleted and is always ID #2:
+        self.last_action_notif_type = None
+        req = ReadActionRequest()
+        req.input.identifier = self.HOME_ACTION_IDENTIFIER
+
+        try:
+            res = self.read_action(req)
+        except rospy.ServiceException:
+            rospy.logerr("Failed to call ReadAction")
+            return False
+        # Execute the HOME action if we could read it
+        else:
+            # What we just read is the input of the ExecuteAction service
+            req = ExecuteActionRequest()
+            req.input = res.output
+            rospy.loginfo("Sending the robot home...")
+            try:
+                self.execute_action(req)
+            except rospy.ServiceException:
+                rospy.logerr("Failed to call ExecuteAction")
+                return False
+            else:
+                # return self.wait_for_action_end_or_abort()
+                return True
 
     def send_joint_traj(self, traj):
         MAX_ANGULAR_DURATION = 30
@@ -192,6 +286,9 @@ class ViveController(object): #RENAME to something
 
     # Constantly updates the current controller pose
     def controller_cb(self, msg):
+        global PREV_TF_STAMP
+        global PREV_TF_COUNT
+
         self.prev_pose = copy.deepcopy(self.cur_pose)
         self.prev_t = copy.deepcopy(self.cur_t)
         self.cur_pose = msg.pose
@@ -204,8 +301,20 @@ class ViveController(object): #RENAME to something
                 self.calculate_vel(dt=dt)                     
         # Publish in the TF tree
         t = TransformStamped()
-
-        t.header.stamp = rospy.Time.now()       
+        
+        # When getting time from a simulation clock, eg. published by Gazebo,
+        # due to the limited resolution of the clock (1000hz), the miminum time diff is
+        # 1ms, so if the callback is somehow called multiple times during that time,
+        # Time.now() might return the same time thus creating a tf with duplicate time stamp.
+        # This is the cause of the following warning:
+        # TF_REPEATED_DATA ignoring data with redundant timestamp for frame vr_controller
+        t.header.stamp = rospy.Time.now() 
+        if t.header.stamp == PREV_TF_STAMP:
+            PREV_TF_COUNT += 1
+            t.header.stamp.nsecs += PREV_TF_COUNT * 10
+        else:
+            PREV_TF_COUNT = 0
+        # print(t.header.stamp)
         t.header.frame_id = "unity"
         t.child_frame_id = "vr_controller"
         t.transform.translation.x = self.cur_pose.position.x
@@ -216,23 +325,28 @@ class ViveController(object): #RENAME to something
         t.transform.rotation.z = self.cur_pose.orientation.z
         t.transform.rotation.w = self.cur_pose.orientation.w
 
+        PREV_TF_STAMP = rospy.Time.now()
+
         self.br.sendTransform(t)
         test_msg = self.cur_pose.position.x
         self.test_pub.publish(test_msg)
     
     # Get the value of the trigger. Default is 0. Softmax is 0.75, max is 1
     def trigger_cb(self, msg):
-        if self.set_init:
-            req = SendGripperCommandRequest()
-            finger = Finger()
-            finger.finger_identifier = 0
-            req.input.gripper.finger.append(finger)
-            req.input.mode = GripperMode.GRIPPER_POSITION
-            val = round(msg.data, 1)
-            if (val * 10) % 2 == 1:
-                val += 0.1
-            finger.value = val
-            self.send_gripper_command(req)
+        # if self.set_init:
+        #     req = SendGripperCommandRequest()
+        #     finger = Finger()
+        #     finger.finger_identifier = 0
+        #     req.input.gripper.finger.append(finger)
+        #     req.input.mode = GripperMode.GRIPPER_POSITION
+        #     val = round(msg.data, 1)
+        #     if (val * 10) % 2 == 1:
+        #         val += 0.1
+        #     finger.value = val
+        #     self.send_gripper_command(req)
+        if (msg.data > 0.1):
+            print("TRIGGER")
+            self.home_the_robot()
 
 
     # Stops all movement and quits if grip is pushed
@@ -250,7 +364,7 @@ class ViveController(object): #RENAME to something
                 req.input.gripper.finger.append(finger)
                 req.input.mode = GripperMode.GRIPPER_POSITION
                 finger.value = 0
-                self.send_gripper_command(req)
+                # self.send_gripper_command(req)
 
                 twist_msg = TwistCommand()
                 self.twist_cmd_pub.publish(twist_msg)
@@ -292,19 +406,21 @@ class ViveController(object): #RENAME to something
         d_roll, d_pitch, d_yaw = euler_from_quaternion(angular_diff, axes='sxyz')
 
         # Calculate position and orientation error / Feed backward
-        self.cur_tool_frame = self.tf_buffer.lookup_transform("base_link", "tool_frame", rospy.Time()).transform
+        self.cur_tool_frame = self.tf_buffer.lookup_transform("base_link", EE_FRAME, rospy.Time()).transform
         controller_pos_diff = cur_pos - self.init_controller_position
 
-        tf_quat = self.tf_buffer.lookup_transform("tool_frame", \
+        tf_quat = self.tf_buffer.lookup_transform(EE_FRAME, \
                                 "vr_controller", rospy.Time()).transform.rotation
         cur_quat = [tf_quat.x, tf_quat.y, tf_quat.z, tf_quat.w]
         quat_err  = quaternion_multiply(cur_quat, self.init_quat_diff_inv)
         pos_error, ang_error = self.calculate_pose_error(controller_pos_diff, quat_err)
 
+
+
         twist_msg = TwistCommand()
-        twist_msg.reference_frame = 0
+        twist_msg.reference_frame = 1
         ff_rot= 1.0
-        ff_trans = 0.5
+        ff_trans = 1.0
         fb_rot = 0.5
         fb_trans = 0.5
 
@@ -316,13 +432,13 @@ class ViveController(object): #RENAME to something
         ee_twist = ee_twist.flatten()
 
         if not self.shared_control:
-            twist_msg.twist.linear_x  = ff_trans * ee_twist[0]  + fb_trans * pos_error[0]
-            twist_msg.twist.linear_y  = ff_trans * ee_twist[1]  + fb_trans * pos_error[1]
-            twist_msg.twist.linear_z  = ff_trans * ee_twist[2]  + fb_trans * pos_error[2]
-            twist_msg.twist.angular_x = ff_rot * ee_twist[3] / dt + fb_rot * ang_error[0]
-            twist_msg.twist.angular_y = ff_rot * ee_twist[4] / dt + fb_rot * ang_error[1]
-            twist_msg.twist.angular_z = ff_rot * ee_twist[5] / dt + fb_rot * ang_error[2]
-
+            twist_msg.twist.linear_x  = ff_trans * ee_twist[0] + fb_trans * pos_error[0]
+            twist_msg.twist.linear_y  = ff_trans * ee_twist[1] + fb_trans * pos_error[1]
+            twist_msg.twist.linear_z  = ff_trans * ee_twist[2] + fb_trans * pos_error[2]
+            # twist_msg.twist.angular_x = ff_rot * ee_twist[3] / dt #+ fb_rot * ang_error[0]
+            # twist_msg.twist.angular_y = ff_rot * ee_twist[4] / dt #+ fb_rot * ang_error[1]
+            twist_msg.twist.angular_z = ff_rot * ee_twist[5] / dt #+ fb_rot * ang_error[2]
+            
         else:
             # The tf data is from base_link to tool_frame
             p_bt = [self.cur_tool_frame.translation.x, 
@@ -334,9 +450,49 @@ class ViveController(object): #RENAME to something
             # q_tt0 = q_tb * q_bt0 (equation to calculate the difference where q_tb = cur_quat)
             quat_diff = quaternion_multiply(cur_quat, q_bt0)
             rpy_diff = euler_from_quaternion(quat_diff)
-
+        
+        # Apply the correction vector
+        if self.repulsive_control:
+            twist_msg.twist = self.blend_twist(twist_msg.twist)
+        # print(twist_msg)
 
         self.twist_cmd_pub.publish(twist_msg)
+
+    def blend_twist(self, s_t):
+        """
+        Blend user input with correction vector
+        Currently we only blend angular velocity around z axis
+        @param s_t current twist
+        """
+        delta_t = 0.025 # 40 Hz
+        damping = 0
+        I = 0.01
+        m = 0.4
+        w_tz = s_t.angular_z
+        v_t  = np.array([
+            s_t.linear_x,
+            s_t.linear_y,
+            s_t.linear_z
+        ])
+        tau_tz = self.correction_vector[5]
+        force_t = self.correction_vector[0:3]
+
+        dw = delta_t * (tau_tz - damping*w_tz) / I
+        dv = delta_t * (force_t - damping*v_t) / m
+        # print('tau_tz', tau_tz)
+        # print('w_tz', w_tz)
+        # print('dw ', dw)
+        # print('dv ', dv)
+
+        w_tz = w_tz + dw
+        s_t.angular_z = w_tz
+
+        v_z  = v_t  + dv
+        # s_t.linear_x = v_z[0]
+        # s_t.linear_y = v_z[1]
+        # s_t.linear_z = v_z[2]
+
+        return s_t
 
     def get_ref_pose_from_exp_traj(self, p):
         # Get reference/optimal pose at given position from expert trajectory
@@ -374,33 +530,20 @@ class ViveController(object): #RENAME to something
 
         return pos_error, ang_error
 
-    def set_init_pose(self):
-        # key = None
-        # while key != '':
-        #     key = input("Press enter to set the intial position of the vr controller, or \"h\" to home the robot\n")
-        #     if key == 'h':
-        #         req = ReadActionRequest()
-        #         req.input.identifier = 2 # Home action identifier
-        #         res = self.read_action(req)
-        #         req = ExecuteActionRequest()
-        #         req.input = res.output
-        #         self.execute_action(req)
-        #         time.sleep(1)
-
-        init_robot_pose = self.tf_buffer.lookup_transform("base_link", "tool_frame", rospy.Time()).transform
-        self.init_robot_position = np.array([init_robot_pose.translation.x, 
-                                             init_robot_pose.translation.y, 
-                                             init_robot_pose.translation.z])
-        init_quat = self.tf_buffer.lookup_transform("tool_frame", "vr_controller", rospy.Time()).transform.rotation
-        self.init_quat_diff_inv = [init_quat.x, init_quat.y, init_quat.z, -init_quat.w]
-
-        self.init_controller_position = [self.cur_pose.position.x, 
-                                         self.cur_pose.position.y, 
-                                         self.cur_pose.position.z]
-        
-        print("Initial controller position set as: ", self.init_controller_position)
-        
-        self.set_init = True
+    def correction_cb(self, msg):
+        # print(type(msg.wrench))
+        self.correction_vector = np.array([msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z, \
+                                            msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z])
+        self.correction_vector = np.nan_to_num(self.correction_vector)
+    
+    def teleport_cb(self, msg):
+        if msg.data == True:
+            self.repulsive_control = not self.repulsive_control
+            rospy.sleep(0.5)
+            if self.repulsive_control:
+                rospy.loginfo("Repulsive control on")
+            else:
+                rospy.loginfo("Repulsive control off")
         
 
 
